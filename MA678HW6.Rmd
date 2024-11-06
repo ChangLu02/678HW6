@@ -1,0 +1,503 @@
+---
+title: "MA678 Homework 6"
+author: "Chang Lu"
+date: "11/3/2024"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,out.width="0.9\\linewidth",dev="pdf",fig.align  = 'center')
+library(ggplot2)
+library(knitr)
+library(arm)
+library(data.table)
+library(foreign)
+library(car)
+library(faraway)
+library(nnet)
+library(reshape2)
+library(VGAM)
+```
+
+## Multinomial logit
+Using the individual-level survey data from the 2000 National Election Study (data in folder NES), predict party identification (which is on a five-point scale) using ideology and demographics with an ordered multinomial logit model.
+
+
+1. Summarize the parameter estimates numerically and also graphically. 
+```{r, include = FALSE}
+library(MASS)
+ library(readr)
+ library(dplyr)
+ library(lmtest)
+ library(broom)
+ library(ggplot2)
+```
+```{r}
+ nes_data <- read.table("nes.txt")
+ nes_data <- nes_data %>%
+  mutate(partyid5 = case_when(
+    partyid7 %in% c(1, 2) ~ 1,  
+    partyid7 == 3 ~ 2,         
+    partyid7 == 4 ~ 3,          
+    partyid7 == 5 ~ 4,          
+    partyid7 %in% c(6, 7) ~ 5  
+  ))
+ nes_data$partyid5 <- factor(nes_data$partyid5, ordered = TRUE)
+ model <- polr(partyid5 ~ ideo7 + age_new + gender + race + educ1, data = nes_data, Hess = TRUE)
+ summary(model)
+```
+```{r}
+coeftest(model, vcov = vcov(model))
+```
+```{r}
+coef_table <- tidy(model, conf.int = TRUE)
+coef_table
+```
+ 
+2. Explain the results from the fitted model.
+
+Overall, this model helps us understand which factors (especially ideology and demographic characteristics) significantly influence individual party
+ identification and provides a way to predict party leaning across different population groups.
+
+3. Use a binned residual plot to assess the fit of the model.
+```{r, include=FALSE}
+ library(MASS)
+ library(readr)
+ library(dplyr)
+ library(ggplot2)
+ library(ordinal)
+```
+
+```{r}
+ nes_data <- read.table("nes.txt")
+ nes_data <- nes_data %>%
+  mutate(partyid5 = case_when(
+    partyid7 %in% c(1, 2) ~ 1,  
+    partyid7 == 3 ~ 2,         
+    partyid7 == 4 ~ 3,          
+    partyid7 == 5 ~ 4,          
+    partyid7 %in% c(6, 7) ~ 5  
+  ))
+ nes_data$partyid5 <- factor(nes_data$partyid5, ordered = TRUE)
+ model_data <- nes_data %>% 
+  select(partyid5, ideo7, age_new, gender, race, educ1) %>% 
+  na.omit()
+ fit <- clm(as.factor(partyid5) ~ ideo7 + age_new + gender + race + educ1 , 
+           data = model_data, link = "logit")
+ predicted_probs <- predict(fit, model_data, type = "prob")$fit
+ predicted_classes <- apply(predicted_probs, 1, which.max)
+ residuals <- as.numeric(model_data$partyid5) - as.numeric(predicted_classes)
+ num_bins <- 20
+ model_data$predicted_classes <- predicted_classes
+ model_data$residuals <- residuals
+ binned_data <- model_data %>%
+  mutate(bin = cut(predicted_classes, breaks = num_bins)) %>%
+  group_by(bin) %>%
+  summarize(mean_residual = mean(residuals, na.rm = TRUE), 
+            bin_center = mean(predicted_classes, na.rm = TRUE)) 
+```
+
+```{r}
+# Check the distribution of predicted classes
+summary(model_data$predicted_classes)
+
+num_bins <- 5  # try reducing the number of bins if there's a narrow range
+
+binned_data <- model_data %>%
+  mutate(bin = cut(predicted_classes, breaks = num_bins)) %>%
+  group_by(bin) %>%
+  summarize(mean_residual = mean(residuals, na.rm = TRUE), 
+            bin_center = mean(predicted_classes, na.rm = TRUE))
+
+ggplot(binned_data, aes(x = bin_center, y = mean_residual)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Binned Residual Plot",
+    x = "Predicted Class (Bin Center)",
+    y = "Mean Residual"
+  ) +
+  theme_minimal()
+
+```
+
+
+## Contingency table and ordered logit model
+In a prospective study of a new living attenuated recombinant vaccine for influenza, patients were randomly allocated to two groups, one of which was given the new vaccine and the other a saline placebo. The responses were titre levels of hemaglutinin inhibiting antibody found in the blood six weeks after vaccination; they were categorized as "small", "medium" or "large". 
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{rrrrr}
+  \hline
+treatment & small & moderate & large & Total \\ 
+  \hline
+placebo &  25 &   8 &   5 & 38 \\ 
+ vaccine &   6 &  18 &  11 & 35 \\ 
+   \hline
+\end{tabular}
+\end{table}
+The cell frequencies in the rows of table are constrained to add to the number of subjects in each treatment group (35 and 38 respectively). We want to know if the pattern of responses is the same for each treatment group.
+
+
+1. Using a chi-square test and an appropriate log-linear model, test the hypothesis that the distribution of responses is the same for the placebo and vaccine groups.
+```{r}
+# Creating the contingency table
+response_data <- matrix(c(25, 8, 5, 6, 18, 11), nrow = 2, byrow = TRUE)
+colnames(response_data) <- c("small", "moderate", "large")
+rownames(response_data) <- c("placebo", "vaccine")
+
+# Display the contingency table
+response_data
+#           small moderate large
+# placebo      25       8     5
+# vaccine       6      18    11
+
+# Chi-square test for independence
+chi_square_test <- chisq.test(response_data)
+chi_square_test
+
+# Fitting a log-linear model to test the association
+# Converting the data to a data frame format for glm
+treatment <- factor(rep(c("placebo", "vaccine"), each = 3))
+response <- factor(rep(c("small", "moderate", "large"), times = 2), 
+                   levels = c("small", "moderate", "large"))
+frequency <- c(25, 8, 5, 6, 18, 11)
+data <- data.frame(treatment, response, frequency)
+
+# Fitting the log-linear model
+log_linear_model <- glm(frequency ~ treatment * response, family = poisson, data = data)
+summary(log_linear_model)
+
+# Reduced model assuming independence (no interaction)
+reduced_model <- glm(frequency ~ treatment + response, family = poisson, data = data)
+summary(reduced_model)
+
+# Likelihood ratio test to compare the models
+anova(reduced_model, log_linear_model, test = "Chisq")
+```
+
+2. For the model corresponding to the hypothesis of homogeneity of response distributions, calculate the fitted values, the Pearson and deviance residuals, and the goodness of fit statistics $X^2$ and $D$. Which of the cells of the table contribute most to $X^2$ and $D$? Explain and interpret these results.
+```{r}
+# Calculate fitted values for the reduced model (homogeneity of response distributions)
+fitted_values <- fitted(reduced_model)
+
+# Calculate Pearson residuals
+pearson_residuals <- residuals(reduced_model, type = "pearson")
+
+# Calculate Deviance residuals
+deviance_residuals <- residuals(reduced_model, type = "deviance")
+
+# Create a data frame with the observed, fitted values, Pearson residuals, and Deviance residuals
+results <- data.frame(
+  Treatment = treatment,
+  Response = response,
+  Observed = frequency,
+  Fitted = fitted_values,
+  Pearson_Residual = pearson_residuals,
+  Deviance_Residual = deviance_residuals
+)
+
+# Display the results
+print(results)
+
+# Calculate the goodness-of-fit statistics
+X_squared <- sum(pearson_residuals^2)  # Pearson chi-square statistic
+D <- sum(deviance_residuals^2)         # Deviance statistic
+
+# Output the goodness-of-fit statistics
+cat("Pearson Chi-Square Statistic (X^2):", X_squared, "\n")
+cat("Deviance Statistic (D):", D, "\n")
+
+# Determine which cells contribute most to X^2 and D
+# Sorting the results based on the absolute values of residuals
+results <- results %>%
+  mutate(Abs_Pearson_Residual = abs(Pearson_Residual),
+         Abs_Deviance_Residual = abs(Deviance_Residual)) %>%
+  arrange(desc(Abs_Pearson_Residual), desc(Abs_Deviance_Residual))
+
+print(results)
+```
+
+3. Re-analyze these data using ordered logit model (use `polr`) to estimate the cut-points of a latent continuous response variable and to estimate a location shift between the two treatment groups. Sketch a rough diagram to illustrate the model which forms the conceptual base for this analysis.
+```{r}
+# Prepare the data in the appropriate format
+treatment <- factor(c(rep("placebo", 3), rep("vaccine", 3)))
+response <- ordered(c("small", "moderate", "large", "small", "moderate", "large"),
+                    levels = c("small", "moderate", "large"))
+frequency <- c(25, 8, 5, 6, 18, 11)
+data <- data.frame(treatment, response, frequency)
+
+# Expanding the data according to frequencies for polr to work correctly
+expanded_data <- data[rep(1:nrow(data), data$frequency), 1:2]
+
+# Fitting the ordered logit model
+ordered_logit_model <- polr(response ~ treatment, data = expanded_data, method = "logistic")
+summary(ordered_logit_model)
+
+```
+### interpretations
+
+#### Thresholds (cut-points): 
+The ordered logit model will provide estimates of the cut-points, which represent the thresholds on the latent continuous variable for moving from one category to the next. These cut-points divide the latent scale into sections corresponding to "small", "moderate", and "large" response levels.
+
+#### Treatment Effect: 
+The coefficient for the treatment variable (vaccine vs. placebo) represents a shift on the latent scale due to the treatment. A positive coefficient would suggest that the vaccine group tends to have higher response levels (e.g., higher antibody levels).
+
+### Conceptual Diagram
+1. Latent Continuous Variable Axis: Draw a horizontal axis representing the latent continuous response variable (e.g., level of hemagglutinin inhibiting antibodies).
+
+2. Cut-points (Thresholds): Mark two points on this axis labeled as $\tau_1$ and $\tau_2$ , representing the thresholds between response levels ("small" to "moderate" and "moderate" to "large").
+
+3. Distribution Shifts: Draw two normal-shaped curves on this axis, one for the placebo group and one for the vaccine group. Shift the vaccine group curve to the right if the treatment effect is positive, indicating higher antibody levels for the vaccine group.
+
+4. Response Categories: Divide the axis into three sections based on the cut-points:
+Left of $\tau_1$: "Small" response
+Between $\tau_1$ and $\tau_2$: "Moderate" response
+Right of $\tau_2$: "Large" response
+
+## High School and Beyond 
+The `hsb` data was collected as a subset of the High School and Beyond study conducted by the National Education Longitudinal Studies program of the National Center for Education Statistics. The variables are gender; race; socioeconomic status; school type; chosen high school program type; scores on reading, writing, math, science, and social studies. We want to determine which factors are related to the choice of the type of program—academic, vocational, or general—that the students pursue in high school. The response is multinomial with three levels.
+
+```{r}
+data(hsb)
+?hsb
+```
+
+1. Fit a trinomial response model with the other relevant variables as predictors (untransformed).
+```{r}
+# Load necessary library
+library(nnet)
+
+# Fit the multinomial logistic regression model
+hsb_model <- multinom(prog ~ gender + race + ses + schtyp + read + write + math + science + socst, data = hsb)
+
+# Display a summary of the model to view coefficients and cut-points
+summary(hsb_model)
+
+```
+
+2. For the student with id 99, compute the predicted probabilities of the three possible choices.
+```{r}
+# Filter the data to get the row for student with ID 99
+student_99 <- hsb[hsb$id == 99, ]
+
+# Compute predicted probabilities for each program type for student with ID 99
+predicted_probs_99 <- predict(hsb_model, newdata = student_99, type = "probs")
+
+# Display the predicted probabilities
+predicted_probs_99
+
+```
+
+
+## Happiness
+Data were collected from 39 students in a University of Chicago MBA class and may be found in the dataset `happy`.
+```{r}
+library(faraway)
+data(happy)
+```
+
+### Build a model for the level of happiness as a function of the other variables.
+```{r}
+# Fit an ordered logistic regression model using polr from MASS package
+happy_model <- polr(as.ordered(happy) ~ money + sex + love + work, data = happy, method = "logistic")
+
+# View the summary of the model to interpret parameters
+summary(happy_model)
+```
+### Interpret the parameters of your chosen model.
+
+1. money (0.02246):
+
+The coefficient for money is 0.02246, which is positive and statistically significant (t-value = 2.1064).
+This means that for each unit increase in money (likely measured in thousands of dollars), the log odds of being in a higher happiness category increase by 0.02246, holding all other variables constant. In practical terms, higher income is associated with a higher level of happiness.
+
+2. sex (-0.47344):
+
+The coefficient for sex is -0.47344, which is negative and not statistically significant (t-value = -0.5955).
+This suggests that being sexually active (sex = 1) may be associated with a decrease in the log odds of being in a higher happiness category, though this relationship is not statistically significant. In this sample, sexual activity does not appear to have a strong association with happiness.
+
+3. love (3.60765):
+
+The coefficient for love is 3.60765, which is positive and statistically significant (t-value = 4.5031).
+This means that as the level of love (or perceived love) increases by one unit, the log odds of being in a higher happiness category increase substantially by 3.60765, holding other variables constant. This is a strong effect, indicating that feeling loved or having a strong romantic relationship is highly associated with higher levels of happiness.
+
+4. work (0.88751):
+
+The coefficient for work is 0.88751, which is positive and statistically significant (t-value = 2.1739).
+This suggests that for each unit increase in work satisfaction, the log odds of being in a higher happiness category increase by 0.88751, holding all other factors constant. Job satisfaction has a moderate and positive association with happiness.
+
+5. Interpretation of Intercepts (Thresholds)
+The intercepts (labeled 2|3, 3|4, 4|5, etc.) represent the estimated thresholds on the latent continuous happiness scale that separate the different observed happiness levels. These cut-points allow the model to distinguish between the ordered levels of happiness.
+
+For example, the threshold 2|3 (5.4708) represents the cut-point on the latent scale between happiness levels 2 and 3.
+Each successive threshold separates adjacent happiness categories, with higher thresholds indicating transitions to higher levels of happiness.
+
+### Predict the happiness distribution for subject whose parents earn $30,000 a year,
+who is lonely, not sexually active and has no job.
+```{r}
+# Define the new data for prediction
+new_subject <- data.frame(money = 30, sex = 0, love = 1, work = 0)
+
+# Predict the probability distribution for happiness levels
+predicted_happiness <- predict(happy_model, newdata = new_subject, type = "probs")
+
+# Display the predicted distribution
+predicted_happiness
+```
+
+## Newspaper survey on Vietnam War
+A student newspaper conducted a survey of student opinions about the Vietnam War in May 1967. Responses were classified by sex, year in the program and one of four opinions. The survey was voluntary. The data may be found in the dataset `uncviet`.  Treat the opinion as the response and the sex and year as predictors. Build a proportional odds model, giving an interpretation to the estimates.
+
+```{r}
+data(uncviet)
+
+```
+
+```{r}
+# Convert `policy` to an ordered factor, assuming it has an inherent ordering
+uncviet$policy <- ordered(uncviet$policy, levels = c("A", "B", "C", "D"))
+
+# Fit the proportional odds model
+policy_model <- polr(policy ~ sex + year, data = uncviet, method = "logistic")
+
+# View the summary of the model to interpret coefficients and thresholds
+summary(policy_model)
+```
+### Interpretation of Coefficients
+
+1. sexMale (2.742e-16):
+
+The coefficient for sexMale is close to zero, which is effectively zero and has no meaningful impact on the log odds.
+This suggests that there is no significant difference in the opinion about the Vietnam War between male and female students.
+
+2. year Variables (Grad, Junior, Senior, Soph):
+
+All coefficients for year (Grad, Junior, Senior, and Sophomore) are also extremely close to zero.
+This implies that the year in the program (e.g., freshman, sophomore, etc.) does not significantly influence students’ opinions on the Vietnam War, as there is no substantial difference in the log odds across these groups.
+The very small values of the coefficients (close to zero) indicate that neither sex nor year has a strong association with the response variable (policy). In other words, these predictors do not seem to meaningfully explain the variation in opinions about the Vietnam War in this model.
+
+### Interpretation of Intercepts (Thresholds)
+The intercepts (or thresholds) in the model represent the cut-points on the latent continuous scale of opinions that separate each adjacent category. Here’s what each threshold represents:
+
+A|B (-1.0986):
+
+This is the threshold between opinions "A" and "B".
+A negative threshold means that the latent variable threshold for moving from "A" to "B" is relatively low, implying that a slight increase in the latent opinion variable would push an individual from the "A" to the "B" category.
+B|C (0.0000):
+
+This threshold between "B" and "C" is exactly zero.
+This suggests that the latent variable levels separating "B" and "C" are symmetric around zero, meaning there is no shift in the underlying latent opinion variable needed to move between these categories.
+C|D (1.0986):
+
+This threshold is positive, suggesting that a higher level on the latent variable is required to move from "C" to "D".
+It implies that transitioning to opinion "D" requires a relatively higher latent opinion score compared to the other transitions.
+### Model Fit
+Residual Deviance (110.9035) and AIC (126.9035):
+These values give us an indication of model fit, though without a comparison to other models, they are difficult to interpret on their own. A lower AIC would indicate a better model if comparing with other models.
+
+## Pneumonoconiosis of coal miners
+The pneumo data gives the number of coal miners classified by radiological examination into one of three categories of pneumonoconiosis and by the number of years spent working at the coal face divided into eight categories.
+
+```{r}
+data(pneumo, package = "faraway")
+```
+
+1. Treating the pneumonoconiosis status as response variable as nominal, build a model for predicting the frequency of the three outcomes in terms of length of service and use it to predict the outcome for a miner with 25 years of service.
+```{r}
+# Fit the multinomial logistic regression model
+pneumo_model <- multinom(status ~ year, data = pneumo, weights = Freq)
+
+# View a summary of the model to examine the coefficients
+summary(pneumo_model)
+
+```
+```{r}
+# Create a new data frame for a miner with 25 years of service
+new_miner <- data.frame(year = 25)
+
+# Predict the probabilities of each status for the new miner
+predicted_probs <- predict(pneumo_model, newdata = new_miner, type = "probs")
+
+# Display the predicted probabilities
+predicted_probs
+```
+2. Repeat the analysis with the pneumonoconiosis status being treated as ordinal. 
+```{r}
+# Convert `status` to an ordered factor
+pneumo$status <- ordered(pneumo$status, levels = c("normal", "mild", "severe"))
+
+```
+```{r}
+# Fit the ordered logistic regression model
+pneumo_ordinal_model <- polr(status ~ year, data = pneumo, weights = Freq, method = "logistic")
+
+# View the summary of the model to examine the coefficients and thresholds
+summary(pneumo_ordinal_model)
+```
+```{r}
+# Create a new data frame for a miner with 25 years of service
+new_miner <- data.frame(year = 25)
+
+# Predict the probabilities of each status for the new miner
+predicted_probs_ordinal <- predict(pneumo_ordinal_model, newdata = new_miner, type = "probs")
+
+# Display the predicted probabilities
+predicted_probs_ordinal
+```
+3. Now treat the response variable as hierarchical with top level indicating whether
+the miner has the disease and the second level indicating, given they have the
+disease, whether they have a moderate or severe case. 
+```{r}
+# Step 1: Create top-level variable for disease presence
+pneumo$disease <- ifelse(pneumo$status == "normal", 0, 1)
+
+# Step 2: Create second-level variable for severity, filtering only those with disease
+pneumo_severity <- subset(pneumo, disease == 1)
+pneumo_severity$severity <- ifelse(pneumo_severity$status == "severe", 1, 0)
+
+# Fit a logistic regression model for disease presence
+disease_model <- glm(disease ~ year, data = pneumo, family = binomial, weights = Freq)
+
+# View the summary of the model
+summary(disease_model)
+
+```
+```{r}
+# Fit a logistic regression model for severity given disease
+severity_model <- glm(severity ~ year, data = pneumo_severity, family = binomial, weights = Freq)
+
+# View the summary of the model
+summary(severity_model)
+```
+
+```{r}
+# Create a new data frame for a miner with 25 years of service
+new_miner <- data.frame(year = 25)
+
+# Step 1: Predict probability of having the disease
+prob_disease <- predict(disease_model, newdata = new_miner, type = "response")
+
+# Step 2: Predict probability of severe case given disease
+prob_severe_given_disease <- predict(severity_model, newdata = new_miner, type = "response")
+
+# Calculate overall probabilities
+prob_no_disease <- 1 - prob_disease
+prob_mild <- prob_disease * (1 - prob_severe_given_disease)
+prob_severe <- prob_disease * prob_severe_given_disease
+
+# Display the probabilities
+cat("Probability of No Disease:", prob_no_disease, "\n")
+cat("Probability of Mild Disease:", prob_mild, "\n")
+cat("Probability of Severe Disease:", prob_severe, "\n")
+```
+4. Compare the three analyses.
+
+1. Multinomial Model: Treats each status as unrelated, making it less interpretable in a progression context, but it is flexible for purely categorical outcomes.
+
+2. Ordinal Model: Uses the ordering of the categories, which is appropriate for severity progression (normal < mild < severe) and aligns well with the nature of the data.
+
+3. Hierarchical Model: Provides a nuanced approach that mirrors real-world decision processes (disease diagnosis followed by severity assessment). This model is intuitive for medical or progressive conditions and provides probabilities in two stages, adding interpretability.
+
+All three approaches yield similar probability estimates for a miner with 25 years of service. However, the hierarchical and ordinal models align better with the context of pneumoconiosis as a disease with ordered progression. The hierarchical model adds further interpretability by breaking down the outcome into disease presence and severity.
+
